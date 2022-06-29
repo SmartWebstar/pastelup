@@ -86,7 +86,7 @@ build-test-img:
 	docker build -t $(TEST_IMG) -f ./test/Dockerfile .
 
 tmp-local:
-	docker build -t pastel-local -f ./test/Dockerfile .
+	docker build -t pastel-local -f ./test/Dockerfile-dev .
 	docker run -it pastel-local /bin/bash
 
 test-walletnode:

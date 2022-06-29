@@ -114,11 +114,9 @@ func (sm LinuxSystemdManager) RegisterService(ctx context.Context, app constants
 	if isRegistered, _ := sm.IsRegistered(app); isRegistered {
 		return nil // already registered
 	}
-	systemdDir := filepath.Join(sm.homeDir, constants.SystemdUserDir)
-	if err := utils.CreateFolder(ctx, systemdDir, params.Force); err != nil && !strings.Contains(err.Error(), "file already exists") {
-		log.WithContext(ctx).WithError(err).Errorf("Failed to create systemd directory: %s", systemdDir)
-		return err
-	}
+
+	systemdDir := constants.SystemdSystemDir
+
 	var systemdFile string
 	var err error
 	var execCmd, execPath, workDir string
@@ -207,11 +205,17 @@ func (sm LinuxSystemdManager) RegisterService(ctx context.Context, app constants
 		return e
 	}
 
-	// write systemdFile to SystemdUserDir with mode 0644
+	// write systemdFile to home dir with the intention to move it
+	// we write then move because it is hard to write directly to a protected directory using golang
+	// tmpPath := filepath.Join(params.Config.WorkingDir, appServiceFileName)
 	if err := ioutil.WriteFile(appServiceFilePath, []byte(systemdFile), 0644); err != nil {
 		log.WithContext(ctx).WithError(err).Error("unable to write " + appServiceFileName + " file")
 	}
-
+	// c := fmt.Sprintf("mv %v %v", tmpPath, appServiceFilePath)
+	// fmt.Printf("running sudo cmd: %v\n", c)
+	// if _, err := runSudoCMD(params.Config, "mv", tmpPath, appServiceFileName); err != nil {
+	// 	log.WithContext(ctx).WithError(err).Error("unable to write " + appServiceFileName + " file")
+	// }
 	// Enable service
 	// @todo -- should this be optional? implications are at device reboot or startup, these services start automatically
 	sm.EnableService(ctx, app)
@@ -305,7 +309,8 @@ func (sm LinuxSystemdManager) ServiceName(app constants.ToolType) string {
 }
 
 func runSystemdCmd(command systemdCmd, serviceName string) (string, error) {
-	cmd := exec.Command("systemctl", "--user", string(command), serviceName)
+	//cmd := exec.Command("systemctl", "--user", string(command), serviceName)
+	cmd := exec.Command("systemctl", string(command), serviceName)
 	var stdBuffer bytes.Buffer
 	mw := io.MultiWriter(os.Stdout, &stdBuffer)
 	cmd.Stdout = mw
@@ -313,5 +318,46 @@ func runSystemdCmd(command systemdCmd, serviceName string) (string, error) {
 	if err := cmd.Run(); err != nil {
 		return stdBuffer.String(), err
 	}
+	return stdBuffer.String(), nil
+}
+
+/*
+ * @todo these functions are copied from common.go file
+ *	to avoid an import cycle. We need to move this shared functionality to its own package
+ *  so that both the servicemanager and cmd packages can use it.
+ *
+ */
+func runSudoCMD(config *configs.Config, args ...string) (string, error) {
+	if len(config.UserPw) > 0 {
+		return runCMD("bash", "-c", "echo "+config.UserPw+" | sudo -S "+strings.Join(args, " "))
+	}
+	return runCMD("sudo", args...)
+}
+
+// RunCMD runs shell command and returns output and error
+func runCMD(command string, args ...string) (string, error) {
+	return runCMDWithEnvVariable(command, "", "", args...)
+}
+
+// RunCMDWithEnvVariable runs shell command with environmental variable and returns output and error
+func runCMDWithEnvVariable(command string, evName string, evValue string, args ...string) (string, error) {
+	cmd := exec.Command(command, args...)
+
+	if len(evName) != 0 && len(evValue) != 0 {
+		additionalEnv := fmt.Sprintf("%s=%s", evName, evValue)
+		cmd.Env = append(os.Environ(), additionalEnv)
+	}
+
+	var stdBuffer bytes.Buffer
+	mw := io.MultiWriter(os.Stdout, &stdBuffer)
+
+	cmd.Stdout = mw
+	cmd.Stderr = mw
+
+	// Execute the command
+	if err := cmd.Run(); err != nil {
+		return stdBuffer.String(), err
+	}
+
 	return stdBuffer.String(), nil
 }
